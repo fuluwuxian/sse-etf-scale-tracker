@@ -11,7 +11,7 @@
 <body class="bg-gray-50 font-sans">
   <div class="max-w-7xl mx-auto p-6">
     <h1 class="text-3xl font-bold text-blue-600 mb-2">上海证券交易所 ETF 总份额历史追踪器</h1>
-    <p class="text-gray-600 mb-8">每天收盘后抓取官方规模 • 本地存储 • 柱状图+5日均线</p>
+    <p class="text-gray-600 mb-8">每天收盘后抓取官方规模 • 已优化解析 • 本地存储 • 柱状图+5日均线</p>
 
     <!-- Tab -->
     <div class="flex border-b mb-6">
@@ -32,20 +32,22 @@
       </table>
     </div>
 
-    <!-- Tab 1: 更新（已增加说明） -->
+    <!-- Tab 1: 更新 -->
     <div id="panel1" class="tab-panel hidden">
       <div class="bg-blue-50 border border-blue-200 rounded-2xl p-6 mb-6 text-sm">
-        <strong>注意：</strong>上交所官网仅提供<strong>当日收盘后</strong>的总份额数据。<br>
-        历史数据需每天收盘后（约15:30后）点击下方按钮更新一次，系统会自动追加。<br>
-        时间跨度选择在「图表查看」页面实现。
+        <strong>说明：</strong>上交所仅提供当日收盘数据，每天收盘后（≈15:30后）点击下方按钮即可。<br>
+        图表时间范围在「图表查看」页选择。
       </div>
-      <button onclick="updateData()" class="w-full bg-green-600 hover:bg-green-700 text-white py-6 text-2xl rounded-2xl font-medium mb-8">
+      <button onclick="testFetch()" class="w-full bg-yellow-500 hover:bg-yellow-600 text-white py-4 text-xl rounded-2xl font-medium mb-4">
+        🔍 测试抓取（查看是否能找到 ETF）
+      </button>
+      <button onclick="updateData()" class="w-full bg-green-600 hover:bg-green-700 text-white py-6 text-2xl rounded-2xl font-medium">
         🚀 抓取今日最新总份额数据
       </button>
-      <div id="updateLog" class="bg-gray-900 text-green-400 p-6 rounded-2xl font-mono text-sm h-96 overflow-auto"></div>
+      <div id="updateLog" class="bg-gray-900 text-green-400 p-6 rounded-2xl font-mono text-sm h-96 overflow-auto mt-6"></div>
     </div>
 
-    <!-- Tab 2: 图表（已有起止日期） -->
+    <!-- Tab 2: 图表 -->
     <div id="panel2" class="tab-panel hidden">
       <div class="flex flex-wrap gap-4 mb-6">
         <select id="selectETF" onchange="renderChart()" class="flex-1 px-4 py-3 border rounded-lg"></select>
@@ -67,8 +69,11 @@
   </div>
 
   <script>
-    // ================== 配置（已优化代理 + 正则解析） ==================
-    const CORS_PROXY = 'https://corsproxy.io/?';
+    // ================== 配置 ==================
+    const PROXIES = [
+      'https://corsproxy.io/?',
+      'https://api.allorigins.win/raw?url='
+    ];
     const SSE_URL = 'https://www.sse.com.cn/market/funddata/volumn/etfvolumn/';
     let etfData = {};
     let chartInstance = null;
@@ -76,40 +81,82 @@
     function loadData() { const saved = localStorage.getItem('sseEtfData'); if (saved) etfData = JSON.parse(saved); }
     function saveData() { localStorage.setItem('sseEtfData', JSON.stringify(etfData)); }
 
-    // ================== 更强的解析（正则匹配，解决 JS 动态加载问题） ==================
+    // ================== 全新解析逻辑（适配分号列表） ==================
     function parseETFTable(html) {
-      // 提取最新日期
+      const dataMap = {};
+      // 提取 ETF规模 后面的数据块
+      const blockMatch = html.match(/ETF规模\s*;(.*?)(?=<|$)/s);
+      const dataBlock = blockMatch ? blockMatch[1] : html;
+
+      // 按分号拆分每条记录
+      const entries = dataBlock.split(';').map(l => l.trim()).filter(l => l.includes(',') && /\d{6}/.test(l));
+
+      entries.forEach(entry => {
+        const parts = entry.split(',').map(p => p.trim());
+        if (parts.length >= 3) {
+          const date = parts[0];
+          const code = parts[1];
+          const name = parts[2];
+          let shares = NaN;
+          if (parts.length >= 4) {
+            shares = parseFloat(parts[3].replace(/,/g, ''));
+          }
+          if (code && code.length === 6 && date && name) {
+            dataMap[code] = { 
+              name, 
+              shares: isNaN(shares) ? 0 : shares, 
+              date 
+            };
+          }
+        }
+      });
+
+      // 备用日期提取
       const dateMatch = html.match(/(\d{4}-\d{2}-\d{2})/);
       const currentDate = dateMatch ? dateMatch[1] : new Date().toISOString().slice(0,10);
 
-      const dataMap = {};
-      // 正则匹配官方数据格式：日期,代码,名称,总份额（万份）
-      const regex = /(\d{4}-\d{2}-\d{2}),\s*(\d{6}),\s*([^,]+?),\s*([\d,.]+)/g;
-      let match;
-      while ((match = regex.exec(html)) !== null) {
-        const code = match[2];
-        const name = match[3].trim();
-        let sharesStr = match[4].replace(/,/g, '');
-        const shares = parseFloat(sharesStr);
-        if (code && !isNaN(shares)) {
-          dataMap[code] = { name, shares, date: currentDate };
-        }
-      }
       return { date: currentDate, dataMap };
     }
 
     async function fetchPage() {
-      const resp = await fetch(CORS_PROXY + encodeURIComponent(SSE_URL), {
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
-      });
-      if (!resp.ok) throw new Error('代理请求失败（请稍后重试）');
-      return await resp.text();
+      let html = '';
+      for (let proxy of PROXIES) {
+        try {
+          const resp = await fetch(proxy + encodeURIComponent(SSE_URL), {
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+          });
+          if (resp.ok) {
+            html = await resp.text();
+            if (html.includes('ETF规模') && html.includes('510')) return html; // 确认抓到数据
+          }
+        } catch(e) {}
+      }
+      throw new Error('所有代理均失败，请稍后重试或检查网络');
+    }
+
+    // ================== 测试抓取（强烈建议先点这个） ==================
+    async function testFetch() {
+      const log = document.getElementById('updateLog');
+      log.innerHTML = '<p class="text-yellow-400">[测试] 正在抓取页面...</p>';
+      try {
+        const html = await fetchPage();
+        const { date, dataMap } = parseETFTable(html);
+        const codes = Object.keys(dataMap);
+        log.innerHTML += `<p class="text-green-400">[成功] 抓取日期：${date}</p>`;
+        log.innerHTML += `<p class="text-green-400">[成功] 共解析到 ${codes.length} 只 ETF</p>`;
+        log.innerHTML += `<p class="text-blue-400">示例代码：${codes.slice(0,8).join(', ')} ...</p>`;
+        if (codes.length > 0) {
+          log.innerHTML += `<p class="text-green-400">✅ 解析正常！你现在可以添加 ETF 了</p>`;
+        }
+      } catch(e) {
+        log.innerHTML += `<p class="text-red-400">[错误] ${e.message}</p>`;
+      }
     }
 
     // ================== 添加 ETF ==================
     async function addETF() {
       let code = document.getElementById('addCode').value.trim().toUpperCase();
-      if (!code || code.length !== 6) return alert('请输入正确的 6 位 ETF 代码');
+      if (!code || code.length !== 6) return alert('请输入 6 位 ETF 代码');
       if (etfData[code]) return alert('该 ETF 已存在');
 
       try {
@@ -121,11 +168,10 @@
           renderETFList();
           alert(`✅ 添加成功：${code} ${dataMap[code].name}`);
         } else {
-          alert(`❌ 未找到代码 ${code}，请确认该 ETF 今日在上交所列表中（或稍后重试）`);
+          alert(`❌ 未找到代码 ${code}，请先点击“测试抓取”确认页面是否能正常解析`);
         }
       } catch(e) {
-        console.error(e);
-        alert('抓取失败，请稍后重试或检查网络');
+        alert('抓取失败：' + e.message);
       }
     }
 
@@ -140,8 +186,7 @@
     // ================== 更新数据 ==================
     async function updateData() {
       const log = document.getElementById('updateLog');
-      log.innerHTML = '<p class="text-yellow-400">[开始] 正在抓取上交所今日 ETF 规模...</p>';
-
+      log.innerHTML = '<p class="text-yellow-400">[开始] 正在抓取今日 ETF 规模...</p>';
       try {
         const html = await fetchPage();
         const { date, dataMap } = parseETFTable(html);
@@ -168,7 +213,7 @@
       }
     }
 
-    // ================== 列表 & 图表（保持不变，仅优化） ==================
+    // ================== 其他功能（不变） ==================
     function renderETFList() {
       const tbody = document.getElementById('etfList');
       tbody.innerHTML = '';
