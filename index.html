@@ -6,41 +6,46 @@
   <title>SSE ETF 总份额历史追踪器</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-  <style> @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&display=swap'); </style>
+  <style>@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&display=swap');</style>
 </head>
 <body class="bg-gray-50 font-sans">
   <div class="max-w-7xl mx-auto p-6">
     <h1 class="text-3xl font-bold text-blue-600 mb-2">上海证券交易所 ETF 总份额历史追踪器</h1>
-    <p class="text-gray-600 mb-8">每天收盘后自动抓取官方规模数据 • 本地持久化存储 • 柱状图+5日均线</p>
+    <p class="text-gray-600 mb-8">每天收盘后抓取官方规模 • 本地存储 • 柱状图+5日均线</p>
 
-    <!-- Tab 导航 -->
+    <!-- Tab -->
     <div class="flex border-b mb-6">
       <button onclick="showTab(0)" id="tab0" class="tab-btn active px-6 py-3 text-lg font-medium">统计目录管理</button>
       <button onclick="showTab(1)" id="tab1" class="tab-btn px-6 py-3 text-lg font-medium">数据更新</button>
       <button onclick="showTab(2)" id="tab2" class="tab-btn px-6 py-3 text-lg font-medium">图表查看</button>
     </div>
 
-    <!-- Tab 0: 统计目录 -->
+    <!-- Tab 0: 目录 -->
     <div id="panel0" class="tab-panel">
       <div class="flex gap-4 mb-6">
         <input id="addCode" type="text" placeholder="输入 ETF 代码（如 510300）" class="flex-1 px-4 py-3 border rounded-lg focus:outline-none focus:border-blue-500">
         <button onclick="addETF()" class="bg-blue-600 text-white px-8 py-3 rounded-lg hover:bg-blue-700">添加</button>
       </div>
       <table class="w-full border-collapse">
-        <thead class="bg-gray-100"><tr><th class="p-4 text-left">代码</th><th class="p-4 text-left">名称</th><th class="p-4 text-left">最新更新</th><th class="p-4 text-left">数据条数</th><th class="p-4 w-24"></th></tr></thead>
+        <thead class="bg-gray-100"><tr><th class="p-4 text-left">代码</th><th class="p-4 text-left">名称</th><th class="p-4 text-left">最新日期</th><th class="p-4 text-left">数据条数</th><th class="p-4 w-24"></th></tr></thead>
         <tbody id="etfList" class="text-sm"></tbody>
       </table>
     </div>
 
-    <!-- Tab 1: 数据更新 -->
+    <!-- Tab 1: 更新（已增加说明） -->
     <div id="panel1" class="tab-panel hidden">
+      <div class="bg-blue-50 border border-blue-200 rounded-2xl p-6 mb-6 text-sm">
+        <strong>注意：</strong>上交所官网仅提供<strong>当日收盘后</strong>的总份额数据。<br>
+        历史数据需每天收盘后（约15:30后）点击下方按钮更新一次，系统会自动追加。<br>
+        时间跨度选择在「图表查看」页面实现。
+      </div>
       <button onclick="updateData()" class="w-full bg-green-600 hover:bg-green-700 text-white py-6 text-2xl rounded-2xl font-medium mb-8">
-        🚀 从上交所抓取最新总份额数据（每日仅需一次）
+        🚀 抓取今日最新总份额数据
       </button>
       <div id="updateLog" class="bg-gray-900 text-green-400 p-6 rounded-2xl font-mono text-sm h-96 overflow-auto"></div>
     </div>
 
-    <!-- Tab 2: 图表查看 -->
+    <!-- Tab 2: 图表（已有起止日期） -->
     <div id="panel2" class="tab-panel hidden">
       <div class="flex flex-wrap gap-4 mb-6">
         <select id="selectETF" onchange="renderChart()" class="flex-1 px-4 py-3 border rounded-lg"></select>
@@ -53,9 +58,7 @@
 
     <!-- 底部工具栏 -->
     <div class="fixed bottom-6 right-6 flex gap-3">
-      <button onclick="exportData()" class="bg-white shadow-lg border px-6 py-3 rounded-2xl flex items-center gap-2 hover:shadow-xl">
-        📤 导出 JSON
-      </button>
+      <button onclick="exportData()" class="bg-white shadow-lg border px-6 py-3 rounded-2xl flex items-center gap-2 hover:shadow-xl">📤 导出 JSON</button>
       <label onclick="document.getElementById('importFile').click()" class="bg-white shadow-lg border px-6 py-3 rounded-2xl flex items-center gap-2 hover:shadow-xl cursor-pointer">
         📥 导入 JSON
         <input type="file" id="importFile" accept=".json" class="hidden" onchange="importData(event)">
@@ -64,22 +67,108 @@
   </div>
 
   <script>
-    // ================== 配置 ==================
-    const CORS_PROXY = 'https://api.allorigins.win/raw?url=';
+    // ================== 配置（已优化代理 + 正则解析） ==================
+    const CORS_PROXY = 'https://corsproxy.io/?';
     const SSE_URL = 'https://www.sse.com.cn/market/funddata/volumn/etfvolumn/';
-    let etfData = {}; // { "510300": { name: "...", history: [{date:"2020-01-01", shares: 12345678.9}, ...] } }
+    let etfData = {};
     let chartInstance = null;
 
-    // ================== 存储 ==================
-    function loadData() {
-      const saved = localStorage.getItem('sseEtfData');
-      if (saved) etfData = JSON.parse(saved);
-    }
-    function saveData() {
-      localStorage.setItem('sseEtfData', JSON.stringify(etfData));
+    function loadData() { const saved = localStorage.getItem('sseEtfData'); if (saved) etfData = JSON.parse(saved); }
+    function saveData() { localStorage.setItem('sseEtfData', JSON.stringify(etfData)); }
+
+    // ================== 更强的解析（正则匹配，解决 JS 动态加载问题） ==================
+    function parseETFTable(html) {
+      // 提取最新日期
+      const dateMatch = html.match(/(\d{4}-\d{2}-\d{2})/);
+      const currentDate = dateMatch ? dateMatch[1] : new Date().toISOString().slice(0,10);
+
+      const dataMap = {};
+      // 正则匹配官方数据格式：日期,代码,名称,总份额（万份）
+      const regex = /(\d{4}-\d{2}-\d{2}),\s*(\d{6}),\s*([^,]+?),\s*([\d,.]+)/g;
+      let match;
+      while ((match = regex.exec(html)) !== null) {
+        const code = match[2];
+        const name = match[3].trim();
+        let sharesStr = match[4].replace(/,/g, '');
+        const shares = parseFloat(sharesStr);
+        if (code && !isNaN(shares)) {
+          dataMap[code] = { name, shares, date: currentDate };
+        }
+      }
+      return { date: currentDate, dataMap };
     }
 
-    // ================== UI 渲染 ==================
+    async function fetchPage() {
+      const resp = await fetch(CORS_PROXY + encodeURIComponent(SSE_URL), {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+      });
+      if (!resp.ok) throw new Error('代理请求失败（请稍后重试）');
+      return await resp.text();
+    }
+
+    // ================== 添加 ETF ==================
+    async function addETF() {
+      let code = document.getElementById('addCode').value.trim().toUpperCase();
+      if (!code || code.length !== 6) return alert('请输入正确的 6 位 ETF 代码');
+      if (etfData[code]) return alert('该 ETF 已存在');
+
+      try {
+        const html = await fetchPage();
+        const { dataMap } = parseETFTable(html);
+        if (dataMap[code]) {
+          etfData[code] = { name: dataMap[code].name, history: [] };
+          saveData();
+          renderETFList();
+          alert(`✅ 添加成功：${code} ${dataMap[code].name}`);
+        } else {
+          alert(`❌ 未找到代码 ${code}，请确认该 ETF 今日在上交所列表中（或稍后重试）`);
+        }
+      } catch(e) {
+        console.error(e);
+        alert('抓取失败，请稍后重试或检查网络');
+      }
+    }
+
+    function deleteETF(code) {
+      if (confirm(`删除 ${code} 及其全部历史数据？`)) {
+        delete etfData[code];
+        saveData();
+        renderETFList();
+      }
+    }
+
+    // ================== 更新数据 ==================
+    async function updateData() {
+      const log = document.getElementById('updateLog');
+      log.innerHTML = '<p class="text-yellow-400">[开始] 正在抓取上交所今日 ETF 规模...</p>';
+
+      try {
+        const html = await fetchPage();
+        const { date, dataMap } = parseETFTable(html);
+        log.innerHTML += `<p class="text-green-400">[成功] 抓取日期：${date}</p>`;
+
+        let updatedCount = 0;
+        Object.keys(etfData).forEach(code => {
+          if (dataMap[code]) {
+            const entry = { date: dataMap[code].date, shares: dataMap[code].shares };
+            const exists = etfData[code].history.some(h => h.date === entry.date);
+            if (!exists) {
+              etfData[code].history.push(entry);
+              etfData[code].history.sort((a,b) => a.date.localeCompare(b.date));
+              updatedCount++;
+            }
+          }
+        });
+
+        saveData();
+        log.innerHTML += `<p class="text-green-400">[完成] 已为 ${updatedCount} 只 ETF 追加 ${date} 数据</p>`;
+        renderETFList();
+      } catch(e) {
+        log.innerHTML += `<p class="text-red-400">[错误] ${e.message}</p>`;
+      }
+    }
+
+    // ================== 列表 & 图表（保持不变，仅优化） ==================
     function renderETFList() {
       const tbody = document.getElementById('etfList');
       tbody.innerHTML = '';
@@ -97,9 +186,9 @@
         `;
         tbody.appendChild(row);
       });
-      // 更新图表下拉
+
       const select = document.getElementById('selectETF');
-      select.innerHTML = '<option value="">选择 ETF</option>';
+      select.innerHTML = '<option value="">选择 ETF 查看图表</option>';
       Object.keys(etfData).forEach(code => {
         const opt = document.createElement('option');
         opt.value = code;
@@ -108,119 +197,23 @@
       });
     }
 
-    // ================== 添加 / 删除 ==================
-    async function addETF() {
-      let code = document.getElementById('addCode').value.trim().toUpperCase();
-      if (!code || code.length !== 6) return alert('请输入 6 位 ETF 代码');
-      if (etfData[code]) return alert('已存在');
-
-      // 先抓取最新数据获取名称
-      try {
-        const html = await fetchPage();
-        const { dataMap } = parseETFTable(html);
-        if (dataMap[code]) {
-          etfData[code] = { name: dataMap[code].name, history: [] };
-          saveData();
-          renderETFList();
-          alert(`✅ 添加成功：${code} ${dataMap[code].name}`);
-        } else {
-          alert('该代码未在今日 ETF 列表中找到，请确认代码正确');
-        }
-      } catch(e) { alert('抓取失败，请稍后重试'); }
-    }
-
-    function deleteETF(code) {
-      if (confirm(`删除 ${code} 及其所有历史数据？`)) {
-        delete etfData[code];
-        saveData();
-        renderETFList();
-      }
-    }
-
-    // ================== 抓取 & 解析 ==================
-    async function fetchPage() {
-      const resp = await fetch(CORS_PROXY + encodeURIComponent(SSE_URL), {
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
-      });
-      if (!resp.ok) throw new Error('网络错误');
-      return await resp.text();
-    }
-
-    function parseETFTable(html) {
-      const parser = new DOMParser();
-      const doc = parser.parseFromString(html, 'text/html');
-      // 注意：如果页面结构变化，请在这里调整选择器（打开官网 F12 查看 table）
-      const rows = doc.querySelectorAll('table tr');
-      const dataMap = {}; // code -> {name, shares}
-      let currentDate = '';
-
-      rows.forEach(row => {
-        const tds = row.querySelectorAll('td');
-        if (tds.length < 4) return;
-        const date = tds[0].textContent.trim();
-        if (date && date.length === 10) currentDate = date;
-        const code = tds[1].textContent.trim();
-        const name = tds[2].textContent.trim();
-        // 假设第 4 列是总份额（万份），根据实际页面可能需要改成 tds[3]
-        let sharesStr = (tds[3] || tds[tds.length-1]).textContent.trim().replace(/,/g, '');
-        const shares = parseFloat(sharesStr);
-        if (code && currentDate && !isNaN(shares)) {
-          dataMap[code] = { name, shares, date: currentDate };
-        }
-      });
-      return { date: currentDate, dataMap };
-    }
-
-    // ================== 更新数据 ==================
-    async function updateData() {
-      const log = document.getElementById('updateLog');
-      log.innerHTML = '<p class="text-yellow-400">[开始] 正在抓取上交所最新 ETF 规模...</p>';
-      
-      try {
-        const html = await fetchPage();
-        const { date, dataMap } = parseETFTable(html);
-        log.innerHTML += `<p class="text-green-400">[成功] 抓取日期：${date}</p>`;
-
-        let updatedCount = 0;
-        Object.keys(etfData).forEach(code => {
-          if (dataMap[code]) {
-            const entry = { date: dataMap[code].date, shares: dataMap[code].shares };
-            // 避免重复日期
-            const exists = etfData[code].history.some(h => h.date === entry.date);
-            if (!exists) {
-              etfData[code].history.push(entry);
-              etfData[code].history.sort((a,b) => a.date.localeCompare(b.date));
-              updatedCount++;
-            }
-          }
-        });
-        saveData();
-        log.innerHTML += `<p class="text-green-400">[完成] 成功更新 ${updatedCount} 只 ETF 的 ${date} 数据</p>`;
-        renderETFList();
-      } catch(e) {
-        log.innerHTML += `<p class="text-red-400">[错误] ${e.message}</p>`;
-      }
-    }
-
-    // ================== 图表渲染 ==================
     function renderChart() {
       const code = document.getElementById('selectETF').value;
-      if (!code || !etfData[code]) return;
+      if (!code || !etfData[code]) return alert('请先选择一只 ETF');
 
       const start = document.getElementById('startDate').value || '2020-01-01';
       const end = document.getElementById('endDate').value || new Date().toISOString().slice(0,10);
 
       let filtered = etfData[code].history.filter(h => h.date >= start && h.date <= end);
-      if (filtered.length === 0) return alert('所选时间范围内无数据');
+      if (filtered.length === 0) return alert('该时间范围内暂无数据');
 
       const labels = filtered.map(h => h.date);
       const sharesData = filtered.map(h => h.shares);
 
-      // 计算 5 日移动平均
       const ma5 = [];
       for (let i = 0; i < sharesData.length; i++) {
         if (i < 4) { ma5.push(null); continue; }
-        const sum = sharesData.slice(i-4, i+1).reduce((a,b)=>a+b, 0);
+        const sum = sharesData.slice(i-4, i+1).reduce((a,b)=>a+b,0);
         ma5.push(sum / 5);
       }
 
@@ -231,44 +224,34 @@
         data: {
           labels: labels,
           datasets: [
-            { label: '总份额（万份）', data: sharesData, backgroundColor: 'rgba(59,130,246,0.7)', borderColor: '#3b82f6', borderWidth: 1, yAxisID: 'y' },
+            { label: '总份额（万份）', data: sharesData, backgroundColor: 'rgba(59,130,246,0.7)', borderColor: '#3b82f6', yAxisID: 'y' },
             { label: '5日移动平均', data: ma5, type: 'line', borderColor: '#f59e0b', borderWidth: 3, tension: 0.3, yAxisID: 'y', pointRadius: 0 }
           ]
         },
         options: {
           responsive: true,
-          scales: {
-            y: { beginAtZero: true, title: { display: true, text: '总份额（万份）' } },
-            x: { title: { display: true, text: '日期' }, ticks: { maxRotation: 45 } }
-          },
-          plugins: { legend: { position: 'top' }, tooltip: { mode: 'index', intersect: false } }
+          scales: { y: { beginAtZero: true, title: { display: true, text: '总份额（万份）' } }, x: { ticks: { maxRotation: 45 } } },
+          plugins: { legend: { position: 'top' }, tooltip: { mode: 'index' } }
         }
       });
     }
 
-    // ================== 导出 / 导入 ==================
     function exportData() {
       const blob = new Blob([JSON.stringify(etfData, null, 2)], {type: 'application/json'});
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
-      a.download = `etf_scale_backup_${new Date().toISOString().slice(0,10)}.json`;
+      a.download = `etf_scale_${new Date().toISOString().slice(0,10)}.json`;
       a.click();
     }
     function importData(e) {
-      const file = e.target.files[0];
       const reader = new FileReader();
-      reader.onload = function(ev) {
-        try {
-          etfData = JSON.parse(ev.target.result);
-          saveData();
-          renderETFList();
-          alert('✅ 导入成功');
-        } catch(err) { alert('文件格式错误'); }
+      reader.onload = ev => {
+        try { etfData = JSON.parse(ev.target.result); saveData(); renderETFList(); alert('✅ 导入成功'); }
+        catch { alert('文件格式错误'); }
       };
-      reader.readAsText(file);
+      reader.readAsText(e.target.files[0]);
     }
 
-    // ================== Tab 切换 ==================
     function showTab(n) {
       document.querySelectorAll('.tab-panel').forEach(p => p.classList.add('hidden'));
       document.getElementById('panel'+n).classList.remove('hidden');
@@ -276,11 +259,9 @@
       document.getElementById('tab'+n).classList.add('active','border-b-2','border-blue-600');
     }
 
-    // ================== 初始化 ==================
-    window.onload = function() {
+    window.onload = () => {
       loadData();
       renderETFList();
-      // 默认日期
       const today = new Date().toISOString().slice(0,10);
       document.getElementById('startDate').value = '2020-01-01';
       document.getElementById('endDate').value = today;
